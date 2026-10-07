@@ -2,6 +2,7 @@
 import torch
 import transformers
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import inspect
 
 MODEL_ID = "allenai/OLMoE-1B-7B-0924"
 
@@ -28,3 +29,10 @@ print(f"total {total_params/1e9:.2f}B | experts {expert_params/1e9:.2f}B "
       f"({100*expert_params/total_params:.1f}%) | "
       f"non-expert {(total_params-expert_params)/1e9:.2f}B")
 print(f"GPU memory allocated: {torch.cuda.memory_allocated()/2**30:.1f} GiB")
+
+mlp = model.model.layers[0].mlp
+for name, p in mlp.named_parameters():
+    print(f"{name:25s} {tuple(p.shape)}")
+for cls in (type(mlp), type(mlp.gate), type(mlp.experts)):
+    print(f"\n===== {cls.__name__}.forward =====")
+    print(inspect.getsource(cls.forward))
