@@ -8,6 +8,7 @@ num_slots = 0 reproduces the stage 2 no-cache baseline.
 num_slots = 64 caches every expert, so after the first fill nothing moves.
 """
 import time
+from contextlib import nullcontext
 
 import torch
 import torch.nn as nn
@@ -32,6 +33,7 @@ class OffloadedExperts(nn.Module):
         self.gate_up_cpu = original.gate_up_proj.detach().cpu().pin_memory()
         self.down_cpu = original.down_proj.detach().cpu().pin_memory()
         self.expert_bytes = self.gate_up_cpu[0].nbytes + self.down_cpu[0].nbytes
+        self.timer = None  # optional TransferTimer (measure.py), set by the harness
         self.set_cache(0)
 
     def set_cache(self, num_slots, policy_cls=LRUPolicy):
@@ -49,13 +51,30 @@ class OffloadedExperts(nn.Module):
         self.down_slots = torch.empty((num_slots, *self.down_cpu.shape[1:]),
                                       dtype=self.down_cpu.dtype, device="cuda")
 
+    def _timed(self):
+        return self.timer.transfer() if self.timer else nullcontext()
+
+    def preload_all(self):
+        """Copy every expert into the cache, then zero the counters.
+
+        Needs num_slots == num_experts. Gives the zero-transfer reference: the
+        same code path as every offloaded run, with nothing left to fetch.
+        """
+        for e in range(self.num_experts):
+            slot = self.cache.insert(e)
+            self.gate_up_slots[slot].copy_(self.gate_up_cpu[e])
+            self.down_slots[slot].copy_(self.down_cpu[e])
+        self.hits = self.misses = self.bytes_moved = 0
+
     def fetch(self, e):
         """Return expert e's weights on the GPU, copying over PCIe only on a miss."""
         if self.cache is None:  # no-cache baseline, same as stage 2
             self.misses += 1
             self.bytes_moved += self.expert_bytes
-            return (self.gate_up_cpu[e].to("cuda", non_blocking=True),
-                    self.down_cpu[e].to("cuda", non_blocking=True))
+            with self._timed():
+                gate_up = self.gate_up_cpu[e].to("cuda", non_blocking=True)
+                down = self.down_cpu[e].to("cuda", non_blocking=True)
+            return gate_up, down
 
         slot = self.cache.lookup(e)
         if slot is None:
@@ -64,8 +83,9 @@ class OffloadedExperts(nn.Module):
             # work runs on one CUDA stream, so this copy is queued after any
             # computation that read the old contents. Once prefetching moves
             # copies to a second stream, this needs explicit synchronization.
-            self.gate_up_slots[slot].copy_(self.gate_up_cpu[e], non_blocking=True)
-            self.down_slots[slot].copy_(self.down_cpu[e], non_blocking=True)
+            with self._timed():
+                self.gate_up_slots[slot].copy_(self.gate_up_cpu[e], non_blocking=True)
+                self.down_slots[slot].copy_(self.down_cpu[e], non_blocking=True)
             self.misses += 1
             self.bytes_moved += self.expert_bytes
         else:
@@ -135,15 +155,6 @@ def main():
         print(f"{f'{slots} slots/layer':>14} | {torch.cuda.memory_allocated()/2**30:7.2f} | "
               f"{NEW_TOKENS/t:5.1f} | {hits/(hits+misses):8.1%} | {gb:8.1f} | "
               f"{torch.equal(ref_out, out)}")
-    
-    for x in experts:
-        x.set_cache(64)
-    generate(model, tok)                      # fills every cache
-    for x in experts:
-        x.hits = x.misses = x.bytes_moved = 0
-    out, t = generate(model, tok)             # same prompt again: cache is warm
-    print(f"warm 64 slots: {NEW_TOKENS/t:.1f} tok/s, misses={sum(x.misses for x in experts)}")
-    print({k: v for k, v in vars(model.config).items() if "impl" in k})
 
 
 if __name__ == "__main__":
