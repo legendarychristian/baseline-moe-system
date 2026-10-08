@@ -1,0 +1,46 @@
+{
+  "description": "Fixed benchmark workload for MoE offloading experiments. Do not edit once results are recorded; add a new file instead.",
+  "new_tokens": 128,
+  "prompts": [
+    {
+      "id": "factual",
+      "category": "factual",
+      "text": "The history of the printing press begins"
+    },
+    {
+      "id": "code",
+      "category": "code",
+      "text": "def merge_sorted_lists(a, b):\n    \"\"\"Merge two sorted lists into a single sorted list.\"\"\"\n"
+    },
+    {
+      "id": "math",
+      "category": "math",
+      "text": "Question: A train travels 180 miles in 3 hours. How long will it take to travel 300 miles at the same speed?\nAnswer: Let's solve this step by step."
+    },
+    {
+      "id": "story",
+      "category": "creative",
+      "text": "Once upon a time, in a village at the edge of a vast desert, there lived a clockmaker who"
+    },
+    {
+      "id": "dialogue",
+      "category": "dialogue",
+      "text": "Customer: Hi, I ordered a laptop last week but it still hasn't arrived.\nSupport agent:"
+    },
+    {
+      "id": "long_summary",
+      "category": "long-context",
+      "text": "Minutes of the Riverbend Town Council, regular session. The meeting opened with a report from the public works director, who explained that the north bridge will close for six weeks in the spring so crews can replace corroded support beams. Several residents raised concerns about longer commute times and asked whether a temporary shuttle could run between the east and west neighborhoods during the closure. The council then discussed the proposed library expansion, which would add a children's wing and a community meeting room. The finance committee reported that the project is roughly fifteen percent over its original estimate because of higher material costs. One council member proposed delaying the expansion by a year, while another argued that construction costs are unlikely to fall. Finally, the council heard a short presentation from the high school robotics team, which recently qualified for a national competition and requested a small grant to cover travel expenses.\n\nIn summary,"
+    },
+    {
+      "id": "list",
+      "category": "instructions",
+      "text": "Here are five practical tips for improving your sleep:\n1."
+    },
+    {
+      "id": "spanish",
+      "category": "non-english",
+      "text": "La ciudad de Barcelona es conocida por"
+    }
+  ]
+}
