@@ -10,7 +10,9 @@ For prefill and decode separately, we record:
   - wall-clock minus transfer time                -> "everything else"
   - hits, misses, bytes moved
 
-Results are printed and saved to results/run_<timestamp>.csv.
+Results are printed and saved to two files:
+  results/run_<timestamp>.csv      the 8 columns the report needs
+  results/run_<timestamp>_raw.csv  every raw measurement, for recomputing anything else
 """
 import csv
 import os
@@ -94,23 +96,22 @@ def run_config(model, experts, reference, blocked, timer, setup):
     return prefill, decode, agree / total, torch.cuda.max_memory_allocated() / 2**30
 
 
-def print_header():
-    print(f"{'config':>16} | {'GPU GiB':>7} | {'prefill s':>9} | {'pf xfer':>7} | "
-          f"{'decode tok/s':>12} | {'dec hit':>7} | {'dec xfer':>8} | {'GB moved':>8} | "
-          f"{'GB/s':>5} | agree")
+def summary_row(name, prefill, decode, agreement, gib):
+    """The 8 numbers the report needs."""
+    return {
+        "config": name,
+        "gpu_peak_gib": round(gib, 2),
+        "decode_tok_per_s": round(decode.tokens / decode.seconds, 2),
+        "decode_hit_rate_pct": round(100 * decode.hit_rate(), 2) if decode.hits + decode.misses else "",
+        "decode_gb_moved": round(decode.bytes / 1e9, 2),
+        "decode_transfer_share_pct": round(100 * decode.transfer_share(), 2),
+        "prefill_transfer_share_pct": round(100 * prefill.transfer_share(), 2),
+        "agreement": round(agreement, 4),
+    }
 
 
-def print_row(name, prefill, decode, agreement, gib):
-    moved = prefill.bytes + decode.bytes
-    xfer_s = (prefill.transfer_ms + decode.transfer_ms) / 1000
-    gbps = f"{moved / 1e9 / xfer_s:5.1f}" if xfer_s else "    -"
-    print(f"{name:>16} | {gib:7.2f} | {prefill.seconds:9.2f} | {prefill.transfer_share():7.0%} | "
-          f"{decode.tokens / decode.seconds:12.1f} | {decode.hit_rate():7.1%} | "
-          f"{decode.transfer_share():8.0%} | {moved / 1e9:8.1f} | {gbps} | {agreement:.2%}")
-
-
-def csv_row(name, prefill, decode, agreement, gib):
-    """Raw numbers only; percentages and tok/s can be computed from these later."""
+def raw_row(name, prefill, decode, agreement, gib):
+    """Every raw measurement, so any other number can be recomputed later."""
     return {
         "config": name,
         "gpu_peak_gib": gib,
@@ -118,6 +119,34 @@ def csv_row(name, prefill, decode, agreement, gib):
         **{f"decode_{k}": v for k, v in asdict(decode).items()},
         "agreement": agreement,
     }
+
+
+class CsvWriter:
+    """Writes one row at a time, saving each immediately so a crash loses nothing."""
+
+    def __init__(self, path):
+        self.path = path
+        self.file = open(path, "w", newline="")
+        self.writer = None
+
+    def write(self, row):
+        if self.writer is None:
+            self.writer = csv.DictWriter(self.file, fieldnames=list(row))
+            self.writer.writeheader()
+        self.writer.writerow(row)
+        self.file.flush()
+
+
+def print_header():
+    print(f"{'config':>16} | {'GPU GiB':>7} | {'decode tok/s':>12} | {'dec hit':>7} | "
+          f"{'dec GB':>7} | {'dec xfer':>8} | {'pf xfer':>7} | agree")
+
+
+def print_row(r):
+    hit = f"{r['decode_hit_rate_pct']:6.1f}%" if r["decode_hit_rate_pct"] != "" else "      -"
+    print(f"{r['config']:>16} | {r['gpu_peak_gib']:7.2f} | {r['decode_tok_per_s']:12.1f} | {hit} | "
+          f"{r['decode_gb_moved']:7.1f} | {r['decode_transfer_share_pct']:7.1f}% | "
+          f"{r['prefill_transfer_share_pct']:6.1f}% | {r['agreement']:.2%}")
 
 
 def main():
@@ -133,20 +162,16 @@ def main():
            torch.tensor([first["generated_ids"]], device="cuda"), blocked)
 
     os.makedirs("results", exist_ok=True)
-    csv_path = f"results/run_{time.strftime('%Y%m%d_%H%M%S')}.csv"
-    csv_file = open(csv_path, "w", newline="")
-    writer = None
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    summary = CsvWriter(f"results/run_{stamp}.csv")      # the 8 report columns
+    raw = CsvWriter(f"results/run_{stamp}_raw.csv")      # every raw measurement
 
     def run(name, experts, setup):
-        nonlocal writer
         result = run_config(model, experts, reference, blocked, timer, setup)
-        print_row(name, *result)
-        row = csv_row(name, *result)
-        if writer is None:
-            writer = csv.DictWriter(csv_file, fieldnames=list(row))
-            writer.writeheader()
-        writer.writerow(row)
-        csv_file.flush()  # save each row immediately, so a crash loses nothing
+        row = summary_row(name, *result)
+        summary.write(row)
+        raw.write(raw_row(name, *result))
+        print_row(row)
 
     print_header()
 
@@ -174,8 +199,7 @@ def main():
                 x.set_cache(slots)
         run(f"{slots} slots/layer", experts, cold)
 
-    csv_file.close()
-    print(f"\nSaved {csv_path}")
+    print(f"\nSaved {summary.path} and {raw.path}")
 
 
 if __name__ == "__main__":
