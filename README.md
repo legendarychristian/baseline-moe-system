@@ -183,35 +183,3 @@ The hit rate falls slowly at first, then quickly once the cache drops below 32 s
 **5. Prefill needs a different fix.** Each prompt starts with an empty cache, so prefill loads every expert for the first time, and no eviction policy can help. Improving prefill requires **prefetching** (loading experts before they're needed) or keeping the cache warm between prompts.
 
 **6. Removing all transfers still leaves a gap to the original model.** Our code tops out at 17.8 tok/s versus 30.2, because it computes experts one at a time in a loop, while the original uses one optimized operation (`grouped_mm`). This matters more for OLMoE than for larger models like Mixtral, because OLMoE's experts are small (12.6 MB vs. about 350 MB), so per-expert overhead is a bigger share of the cost. It also explains why transfers are at most 53% of time here, compared with the 85–95% that HOBBIT reports for Mixtral.
-
-### Grading criteria
-
-**Reproducibility**
-
-- ✅ Fixed workload: `prompts.json`, plus saved tokens in `reference_tokens.json`, so every run processes identical text.
-- ✅ Each prompt starts with an empty cache, so prompt order doesn't affect results.
-- ✅ Raw results are saved to CSV.
-- ✅ Library versions are pinned in `requirements.txt`.
-- ✅ The counts (hits, misses, bytes, agreement) were identical across two separate runs, and timings varied by only about 1–2%.
-- ⚠️ No setup script yet. A fresh Ubuntu machine also needs `pip install --upgrade pip` before installing requirements.
-- ⚠️ Each configuration was run only once. Several runs per configuration would give error bars on the timings.
-
-**Correctness of the methodology**
-
-The measurements were checked against each other and against expectations:
-
-- Every offloaded run agrees with the reference identically (99.02%), so the cache never changes results.
-- GPU memory matches the formula exactly: 1.5 GiB more for every 8 slots per layer.
-- Transfer speed is the same (~24.5 GB/s) in every configuration, close to what PCIe Gen4 delivers in practice.
-- Non-transfer time is nearly constant across configurations and matches the preloaded run, which has no transfers at all. This confirms that the transfer measurement captures the full cost of offloading.
-- The comparison uses a fair "no transfers" reference (our code, preloaded), not just the original model. The original uses a faster kernel, and comparing against it alone would overstate how much time goes to transfers.
-
-**Sound empirical conclusion**
-
-The baseline is **transfer-bound with small caches and compute-bound with large ones**, with the crossover around 32 slots per layer. Prefill is transfer-bound at every cache size. This tells the rest of the project where to focus: smarter eviction for decode in the 8–32 slot range, prefetching for prefill, and a faster expert kernel to raise the ceiling.
-
-### Remaining gaps
-
-- Measure CPU memory directly instead of calculating it.
-- Add a setup script that installs everything from scratch.
-- Run each configuration 3–5 times and report averages with error bars.
